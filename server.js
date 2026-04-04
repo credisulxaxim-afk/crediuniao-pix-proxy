@@ -5,12 +5,11 @@ import axios from "axios";
 const app = express();
 app.use(express.json());
 
-// Carrega certificado (Base64 vindo do Railway)
 const certBuffer = Buffer.from(process.env.PIX_CERT_BASE64, "base64");
 
 const httpsAgent = new https.Agent({
   pfx: certBuffer,
-  passphrase: process.env.PIX_CERT_PASSWORD
+  passphrase: process.env.PIX_CERT_PASSWORD,
 });
 
 app.post("/pix", async (req, res) => {
@@ -26,21 +25,21 @@ app.post("/pix", async (req, res) => {
             Buffer.from(
               ${process.env.PIX_CLIENT_ID}:${process.env.PIX_CLIENT_SECRET}
             ).toString("base64"),
-          "Content-Type": "application/json"
-        }
+          "Content-Type": "application/json",
+        },
       }
     );
 
     res.json(response.data);
   } catch (err) {
     res.status(500).json({
-      error: err.response?.data || err.message
+      error: err.response?.data || err.message,
     });
   }
 });
 
 app.get("/", (req, res) => {
-  res.send("Proxy PIX rodando 🚀");
+  res.send("Proxy PIX rodando");
 });
 
 const PORT = process.env.PORT || 3000;
