@@ -25,16 +25,13 @@ app.get('/', (req, res) => {
 });
 
 // ─── Middleware: valida segredo do proxy ─────────────────────────────────────
-// Aceita tanto x-proxy-secret quanto Authorization: Bearer <segredo>
 function validarSegredo(req, res, next) {
   const headerDireto = req.headers['x-proxy-secret'];
   const authHeader   = req.headers['authorization'];
   const bearer       = authHeader && authHeader.startsWith('Bearer ')
     ? authHeader.slice(7)
     : null;
-
   const segredo = headerDireto || bearer;
-
   if (!segredo || segredo !== PIX_PROXY_SECRET) {
     return res.status(401).json({ erro: 'Acesso não autorizado.' });
   }
@@ -46,18 +43,26 @@ function criarAgent() {
   if (!PIX_CERT_BASE64) {
     throw new Error('PIX_CERT_BASE64 não definido nas variáveis de ambiente.');
   }
-  const certBuffer = Buffer.from(PIX_CERT_BASE64, 'base64');
-  return new https.Agent({
+
+  // Remove espaços/quebras de linha do Base64 antes de decodificar
+  const certBuffer = Buffer.from(PIX_CERT_BASE64.replace(/\s+/g, ''), 'base64');
+
+  // Monta o agente — só inclui passphrase se tiver valor
+  const agentOptions = {
     pfx: certBuffer,
-    passphrase: PIX_CERT_PASSWORD,
     rejectUnauthorized: true,
-  });
+  };
+
+  if (PIX_CERT_PASSWORD) {
+    agentOptions.passphrase = PIX_CERT_PASSWORD;
+  }
+
+  return new https.Agent(agentOptions);
 }
 
 // ─── Obtém token OAuth da Efí ─────────────────────────────────────────────────
 async function obterToken(agent) {
   const credencial = Buffer.from(`${PIX_CLIENT_ID}:${PIX_CLIENT_SECRET}`).toString('base64');
-
   const resposta = await axios.post(
     EFI_TOKEN_URL,
     'grant_type=client_credentials',
@@ -69,18 +74,16 @@ async function obterToken(agent) {
       },
     }
   );
-
   return resposta.data.access_token;
 }
 
-// ─── Rota: gerar cobrança PIX (/pix e /gerar-pix — ambas funcionam) ──────────
+// ─── Handler: gerar cobrança PIX ─────────────────────────────────────────────
 async function handleGerarPix(req, res) {
   try {
-    // Suporta payload direto ou aninhado em req.body.payload
-    const dados = req.body.payload || req.body;
-    const valor      = dados?.valor?.original || dados?.valor;
-    const descricao  = dados?.solicitacaoPagador || dados?.descricao || 'Cobrança CrediUnião';
-    const txid       = req.body.txid || dados?.txid;
+    const dados     = req.body.payload || req.body;
+    const valor     = dados?.valor?.original || dados?.valor;
+    const descricao = dados?.solicitacaoPagador || dados?.descricao || 'Cobrança CrediUnião';
+    const txid      = req.body.txid || dados?.txid;
 
     if (!valor) {
       return res.status(400).json({ erro: 'Campo "valor" é obrigatório.' });
@@ -98,7 +101,6 @@ async function handleGerarPix(req, res) {
 
     let url    = EFI_COB_URL;
     let metodo = 'post';
-
     if (txid) {
       url    = `${EFI_COB_URL}/${txid}`;
       metodo = 'put';
@@ -134,17 +136,13 @@ app.post('/gerar-pix', validarSegredo, handleGerarPix);
 app.get('/consultar-pix/:txid', validarSegredo, async (req, res) => {
   try {
     const { txid } = req.params;
-
     const agent = criarAgent();
     const token = await obterToken(agent);
-
     const resposta = await axios.get(`${EFI_COB_URL}/${txid}`, {
       httpsAgent: agent,
       headers: { 'Authorization': `Bearer ${token}` },
     });
-
     return res.json(resposta.data);
-
   } catch (erro) {
     console.error('[ERRO /consultar-pix]', erro?.response?.data || erro.message);
     return res.status(500).json({
