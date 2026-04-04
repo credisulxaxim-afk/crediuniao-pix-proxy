@@ -14,7 +14,7 @@ const PIX_PROXY_SECRET  = process.env.PIX_PROXY_SECRET  || '';
 
 // ─── URLs da Efí ────────────────────────────────────────────────────────────
 const EFI_BASE_URL  = 'https://pix-h.api.efipay.com.br'; // homologação
-// const EFI_BASE_URL = 'https://pix.api.efipay.com.br';  // produção (trocar depois)
+// const EFI_BASE_URL = 'https://pix.api.efipay.com.br'; // produção (trocar depois)
 
 const EFI_TOKEN_URL = `${EFI_BASE_URL}/oauth/token`;
 const EFI_COB_URL   = `${EFI_BASE_URL}/v2/cob`;
@@ -25,8 +25,16 @@ app.get('/', (req, res) => {
 });
 
 // ─── Middleware: valida segredo do proxy ─────────────────────────────────────
+// Aceita tanto x-proxy-secret quanto Authorization: Bearer <segredo>
 function validarSegredo(req, res, next) {
-  const segredo = req.headers['x-proxy-secret'];
+  const headerDireto = req.headers['x-proxy-secret'];
+  const authHeader   = req.headers['authorization'];
+  const bearer       = authHeader && authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7)
+    : null;
+
+  const segredo = headerDireto || bearer;
+
   if (!segredo || segredo !== PIX_PROXY_SECRET) {
     return res.status(401).json({ erro: 'Acesso não autorizado.' });
   }
@@ -41,7 +49,7 @@ function criarAgent() {
   const certBuffer = Buffer.from(PIX_CERT_BASE64, 'base64');
   return new https.Agent({
     pfx: certBuffer,
-    passphrase: PIX_CERT_PASSWORD, // vazio se sem senha
+    passphrase: PIX_CERT_PASSWORD,
     rejectUnauthorized: true,
   });
 }
@@ -65,10 +73,14 @@ async function obterToken(agent) {
   return resposta.data.access_token;
 }
 
-// ─── Rota: gerar cobrança PIX ─────────────────────────────────────────────────
-app.post('/gerar-pix', validarSegredo, async (req, res) => {
+// ─── Rota: gerar cobrança PIX (/pix e /gerar-pix — ambas funcionam) ──────────
+async function handleGerarPix(req, res) {
   try {
-    const { valor, descricao, txid } = req.body;
+    // Suporta payload direto ou aninhado em req.body.payload
+    const dados = req.body.payload || req.body;
+    const valor      = dados?.valor?.original || dados?.valor;
+    const descricao  = dados?.solicitacaoPagador || dados?.descricao || 'Cobrança CrediUnião';
+    const txid       = req.body.txid || dados?.txid;
 
     if (!valor) {
       return res.status(400).json({ erro: 'Campo "valor" é obrigatório.' });
@@ -78,22 +90,17 @@ app.post('/gerar-pix', validarSegredo, async (req, res) => {
     const token = await obterToken(agent);
 
     const payload = {
-      calendario: {
-        expiracao: 3600,
-      },
-      valor: {
-        original: parseFloat(valor).toFixed(2),
-      },
+      calendario: { expiracao: 3600 },
+      valor: { original: parseFloat(valor).toFixed(2) },
       chave: 'c46897e1-3a12-478a-9b47-0e529b33b1ee',
-      solicitacaoPagador: descricao || 'Cobrança CrediUnião',
+      solicitacaoPagador: descricao,
     };
 
-    let url = EFI_COB_URL;
+    let url    = EFI_COB_URL;
     let metodo = 'post';
 
-    // Se vier txid, usa PUT com txid definido; senão POST gera txid automático
     if (txid) {
-      url = `${EFI_COB_URL}/${txid}`;
+      url    = `${EFI_COB_URL}/${txid}`;
       metodo = 'put';
     }
 
@@ -111,13 +118,17 @@ app.post('/gerar-pix', validarSegredo, async (req, res) => {
     return res.json(resposta.data);
 
   } catch (erro) {
-    console.error('[ERRO /gerar-pix]', erro?.response?.data || erro.message);
+    console.error('[ERRO /pix]', erro?.response?.data || erro.message);
     return res.status(500).json({
       erro: 'Falha ao gerar cobrança PIX.',
       detalhe: erro?.response?.data || erro.message,
     });
   }
-});
+}
+
+// Aceita nos dois endpoints
+app.post('/pix',       validarSegredo, handleGerarPix);
+app.post('/gerar-pix', validarSegredo, handleGerarPix);
 
 // ─── Rota: consultar cobrança PIX por txid ────────────────────────────────────
 app.get('/consultar-pix/:txid', validarSegredo, async (req, res) => {
@@ -129,9 +140,7 @@ app.get('/consultar-pix/:txid', validarSegredo, async (req, res) => {
 
     const resposta = await axios.get(`${EFI_COB_URL}/${txid}`, {
       httpsAgent: agent,
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: { 'Authorization': `Bearer ${token}` },
     });
 
     return res.json(resposta.data);
