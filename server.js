@@ -1,6 +1,6 @@
-const express = require('express');
-const axios = require('axios');
-const https = require('https');
+import express from 'express';
+import axios from 'axios';
+import https from 'https';
 
 const app = express();
 app.use(express.json());
