@@ -19,14 +19,13 @@ app.post("/pix", async (req, res) => {
       req.body,
       {
         httpsAgent,
-       headers: {
-  Authorization:
-    "Basic " +
-    Buffer.from(
-      '${process.env.PIX_CLIENT_ID}:${process.env.PIX_CLIENT_SECRET}'
-    ).toString("base64"),
-  "Content-Type": "application/json",
-},
+        headers: {
+          Authorization:
+            "Basic " +
+            Buffer.from(
+              `${process.env.PIX_CLIENT_ID}:${process.env.PIX_CLIENT_SECRET}`
+            ).toString("base64"),
+          "Content-Type": "application/json",
         },
       }
     );
