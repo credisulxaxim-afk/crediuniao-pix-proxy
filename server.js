@@ -93,7 +93,7 @@ async function handleGerarPix(req, res) {
     const dados     = req.body.payload || req.body;
     const valor     = dados?.valor?.original || dados?.valor;
     const descricao = dados?.solicitacaoPagador || dados?.descricao || 'Cobrança CrediUnião';
-    const txid      = req.body.txid || dados?.txid;
+    const txid      = null; // Efí gera automaticamente
 
     if (!valor) {
       return res.status(400).json({ erro: 'Campo "valor" é obrigatório.' });
