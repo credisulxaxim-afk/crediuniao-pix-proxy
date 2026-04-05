@@ -1,6 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import https from 'https';
+import forge from 'node-forge';
 
 const app = express();
 app.use(express.json());
@@ -38,26 +39,35 @@ function validarSegredo(req, res, next) {
   next();
 }
 
-// ─── Monta o https.Agent com o certificado .p12 ──────────────────────────────
+// ─── Monta o https.Agent usando node-forge (sem depender do OpenSSL do sistema)
 function criarAgent() {
   if (!PIX_CERT_BASE64) {
     throw new Error('PIX_CERT_BASE64 não definido nas variáveis de ambiente.');
   }
 
-  // Remove espaços/quebras de linha do Base64 antes de decodificar
-  const certBuffer = Buffer.from(PIX_CERT_BASE64.replace(/\s+/g, ''), 'base64');
+  // Decodifica o Base64 para buffer binário
+  const p12Base64 = PIX_CERT_BASE64.replace(/\s+/g, '');
+  const p12Der    = Buffer.from(p12Base64, 'base64').toString('binary');
 
-  // Monta o agente — só inclui passphrase se tiver valor
-  const agentOptions = {
-    pfx: certBuffer,
+  // Parseia o P12 com node-forge (JavaScript puro, sem OpenSSL)
+  const p12Asn1 = forge.asn1.fromDer(p12Der);
+  const p12     = forge.pkcs12.pkcs12FromAsn1(p12Asn1, PIX_CERT_PASSWORD || '');
+
+  // Extrai certificado
+  const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
+  const certBag  = certBags[forge.pki.oids.certBag][0];
+  const certPem  = forge.pki.certificateToPem(certBag.cert);
+
+  // Extrai chave privada
+  const keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+  const keyBag  = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag][0];
+  const keyPem  = forge.pki.privateKeyToPem(keyBag.key);
+
+  return new https.Agent({
+    cert: certPem,
+    key:  keyPem,
     rejectUnauthorized: true,
-  };
-
-  if (PIX_CERT_PASSWORD) {
-    agentOptions.passphrase = PIX_CERT_PASSWORD;
-  }
-
-  return new https.Agent(agentOptions);
+  });
 }
 
 // ─── Obtém token OAuth da Efí ─────────────────────────────────────────────────
@@ -128,7 +138,6 @@ async function handleGerarPix(req, res) {
   }
 }
 
-// Aceita nos dois endpoints
 app.post('/pix',       validarSegredo, handleGerarPix);
 app.post('/gerar-pix', validarSegredo, handleGerarPix);
 
