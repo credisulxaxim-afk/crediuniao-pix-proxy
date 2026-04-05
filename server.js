@@ -15,12 +15,15 @@ const PIX_PROXY_SECRET  = process.env.PIX_PROXY_SECRET  || '';
 
 // ─── URLs da Efí ────────────────────────────────────────────────────────────
 const EFI_BASE_URL  = 'https://pix-h.api.efipay.com.br'; // homologação
-// const EFI_BASE_URL = 'https://pix.api.efipay.com.br'; // produção (trocar depois)
+// const EFI_BASE_URL = 'https://pix.api.efipay.com.br'; // produção
 
 const EFI_TOKEN_URL = `${EFI_BASE_URL}/oauth/token`;
 const EFI_COB_URL   = `${EFI_BASE_URL}/v2/cob`;
+const EFI_PIX_URL   = `${EFI_BASE_URL}/v2/pix`;
+const EFI_SALDO_URL = `${EFI_BASE_URL}/v2/gn/saldo`;
+const EFI_EXTRATO_URL = `${EFI_BASE_URL}/v2/gn/extrato`;
 
-// ─── Rota de health check ────────────────────────────────────────────────────
+// ─── Health check ────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({ status: 'Proxy CrediUnião PIX online' });
 });
@@ -39,29 +42,23 @@ function validarSegredo(req, res, next) {
   next();
 }
 
-// ─── Monta o https.Agent usando node-forge (sem depender do OpenSSL do sistema)
+// ─── Monta o https.Agent com node-forge ──────────────────────────────────────
 function criarAgent() {
   if (!PIX_CERT_BASE64) {
     throw new Error('PIX_CERT_BASE64 não definido nas variáveis de ambiente.');
   }
-
-  // Decodifica o Base64 para buffer binário
   const p12Base64 = PIX_CERT_BASE64.replace(/\s+/g, '');
   const p12Der    = Buffer.from(p12Base64, 'base64').toString('binary');
+  const p12Asn1   = forge.asn1.fromDer(p12Der);
+  const p12       = forge.pkcs12.pkcs12FromAsn1(p12Asn1, PIX_CERT_PASSWORD || '');
 
-  // Parseia o P12 com node-forge (JavaScript puro, sem OpenSSL)
-  const p12Asn1 = forge.asn1.fromDer(p12Der);
-  const p12     = forge.pkcs12.pkcs12FromAsn1(p12Asn1, PIX_CERT_PASSWORD || '');
+  const certBags  = p12.getBags({ bagType: forge.pki.oids.certBag });
+  const certBag   = certBags[forge.pki.oids.certBag][0];
+  const certPem   = forge.pki.certificateToPem(certBag.cert);
 
-  // Extrai certificado
-  const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
-  const certBag  = certBags[forge.pki.oids.certBag][0];
-  const certPem  = forge.pki.certificateToPem(certBag.cert);
-
-  // Extrai chave privada
-  const keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
-  const keyBag  = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag][0];
-  const keyPem  = forge.pki.privateKeyToPem(keyBag.key);
+  const keyBags   = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+  const keyBag    = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag][0];
+  const keyPem    = forge.pki.privateKeyToPem(keyBag.key);
 
   return new https.Agent({
     cert: certPem,
@@ -87,7 +84,7 @@ async function obterToken(agent) {
   return resposta.data.access_token;
 }
 
-// ─── Handler: gerar cobrança PIX ─────────────────────────────────────────────
+// ─── Rota: gerar cobrança PIX ─────────────────────────────────────────────────
 async function handleGerarPix(req, res) {
   try {
     const dados     = req.body.payload || req.body;
@@ -109,17 +106,7 @@ async function handleGerarPix(req, res) {
       solicitacaoPagador: descricao,
     };
 
-    let url    = EFI_COB_URL;
-    let metodo = 'post';
-    if (txid) {
-      url    = `${EFI_COB_URL}/${txid}`;
-      metodo = 'put';
-    }
-
-    const resposta = await axios({
-      method: metodo,
-      url,
-      data: payload,
+    const resposta = await axios.post(EFI_COB_URL, payload, {
       httpsAgent: agent,
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -141,17 +128,72 @@ async function handleGerarPix(req, res) {
 app.post('/pix',       validarSegredo, handleGerarPix);
 app.post('/gerar-pix', validarSegredo, handleGerarPix);
 
-// ─── Rota: consultar cobrança PIX por txid ────────────────────────────────────
+// ─── Rota: consultar saldo ────────────────────────────────────────────────────
+app.get('/saldo', validarSegredo, async (req, res) => {
+  try {
+    const agent = criarAgent();
+    const token = await obterToken(agent);
+
+    const resposta = await axios.get(EFI_SALDO_URL, {
+      httpsAgent: agent,
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+
+    return res.json(resposta.data);
+
+  } catch (erro) {
+    console.error('[ERRO /saldo]', erro?.response?.data || erro.message);
+    return res.status(500).json({
+      erro: 'Falha ao consultar saldo.',
+      detalhe: erro?.response?.data || erro.message,
+    });
+  }
+});
+
+// ─── Rota: extrato ────────────────────────────────────────────────────────────
+app.get('/extrato', validarSegredo, async (req, res) => {
+  try {
+    const { inicio, fim } = req.query;
+
+    const agent = criarAgent();
+    const token = await obterToken(agent);
+
+    const params = {
+      inicio: inicio || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+      fim:    fim    || new Date().toISOString(),
+    };
+
+    const resposta = await axios.get(EFI_PIX_URL, {
+      httpsAgent: agent,
+      headers: { 'Authorization': `Bearer ${token}` },
+      params,
+    });
+
+    return res.json(resposta.data);
+
+  } catch (erro) {
+    console.error('[ERRO /extrato]', erro?.response?.data || erro.message);
+    return res.status(500).json({
+      erro: 'Falha ao consultar extrato.',
+      detalhe: erro?.response?.data || erro.message,
+    });
+  }
+});
+
+// ─── Rota: consultar cobrança por txid ───────────────────────────────────────
 app.get('/consultar-pix/:txid', validarSegredo, async (req, res) => {
   try {
     const { txid } = req.params;
     const agent = criarAgent();
     const token = await obterToken(agent);
+
     const resposta = await axios.get(`${EFI_COB_URL}/${txid}`, {
       httpsAgent: agent,
       headers: { 'Authorization': `Bearer ${token}` },
     });
+
     return res.json(resposta.data);
+
   } catch (erro) {
     console.error('[ERRO /consultar-pix]', erro?.response?.data || erro.message);
     return res.status(500).json({
