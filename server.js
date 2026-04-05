@@ -12,7 +12,8 @@ const PIX_CLIENT_ID     = process.env.PIX_CLIENT_ID     || '';
 const PIX_CLIENT_SECRET = process.env.PIX_CLIENT_SECRET || '';
 const PIX_PROXY_SECRET  = process.env.PIX_PROXY_SECRET  || '';
 
-const EFI_BASE_URL  = 'https://pix-h.api.efipay.com.br';
+// ✅ PRODUÇÃO (era pix-h.api.efipay.com.br — homologação)
+const EFI_BASE_URL  = 'https://pix.api.efipay.com.br';
 const EFI_TOKEN_URL = `${EFI_BASE_URL}/oauth/token`;
 const EFI_COB_URL   = `${EFI_BASE_URL}/v2/cob`;
 const EFI_PIX_URL   = `${EFI_BASE_URL}/v2/pix`;
@@ -64,24 +65,19 @@ async function handleGerarPix(req, res) {
     const dados     = req.body.payload || req.body;
     const valor     = dados?.valor?.original || dados?.valor;
     const descricao = dados?.solicitacaoPagador || dados?.descricao || 'Cobrança CrediUnião';
-
     if (!valor) return res.status(400).json({ erro: 'Campo "valor" é obrigatório.' });
-
     const agent = criarAgent();
     const token = await obterToken(agent);
-
     const payload = {
       calendario: { expiracao: 3600 },
       valor: { original: parseFloat(valor).toFixed(2) },
       chave: 'c46897e1-3a12-478a-9b47-0e529b33b1ee',
       solicitacaoPagador: descricao,
     };
-
     const resposta = await axios.post(EFI_COB_URL, payload, {
       httpsAgent: agent,
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
     });
-
     return res.json(resposta.data);
   } catch (erro) {
     console.error('[ERRO /pix]', erro?.response?.data || erro.message);
@@ -96,26 +92,20 @@ app.post('/gerar-pix', validarSegredo, handleGerarPix);
 app.post('/pagar-pix', validarSegredo, async (req, res) => {
   try {
     const { chave, valor, descricao } = req.body;
-
     if (!chave) return res.status(400).json({ erro: 'Chave Pix é obrigatória.' });
     if (!valor) return res.status(400).json({ erro: 'Valor é obrigatório.' });
-
     const agent = criarAgent();
     const token = await obterToken(agent);
-
     const payload = {
       valor: parseFloat(valor).toFixed(2),
       pagador: { chave: 'c46897e1-3a12-478a-9b47-0e529b33b1ee' },
       favorecido: { chave },
     };
-
     if (descricao) payload.inforPagador = descricao;
-
     const resposta = await axios.post(`${EFI_PIX_URL}`, payload, {
       httpsAgent: agent,
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
     });
-
     return res.json(resposta.data);
   } catch (erro) {
     console.error('[ERRO /pagar-pix]', erro?.response?.data || erro.message);
@@ -175,6 +165,52 @@ app.get('/consultar-pix/:txid', validarSegredo, async (req, res) => {
   } catch (erro) {
     console.error('[ERRO /consultar-pix]', erro?.response?.data || erro.message);
     return res.status(500).json({ erro: 'Falha ao consultar cobrança.', detalhe: erro?.response?.data || erro.message });
+  }
+});
+
+// ─── Registrar webhook Pix na Efí ────────────────────────────────────────────
+app.put('/webhook/:chave', validarSegredo, async (req, res) => {
+  try {
+    const { chave } = req.params;
+    const { webhookUrl } = req.body;
+    if (!webhookUrl) return res.status(400).json({ erro: 'Campo "webhookUrl" é obrigatório.' });
+    const agent = criarAgent();
+    const token = await obterToken(agent);
+    const resposta = await axios.put(
+      `${EFI_BASE_URL}/v2/webhook/${chave}`,
+      { webhookUrl },
+      {
+        httpsAgent: agent,
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      }
+    );
+    return res.json({ sucesso: true, status: resposta.status, data: resposta.data });
+  } catch (erro) {
+    console.error('[ERRO /webhook]', erro?.response?.data || erro.message);
+    return res.status(erro.response?.status || 500).json({
+      erro: 'Falha ao registrar webhook.',
+      detalhe: erro?.response?.data || erro.message,
+    });
+  }
+});
+
+// ─── Consultar webhook registrado ────────────────────────────────────────────
+app.get('/webhook/:chave', validarSegredo, async (req, res) => {
+  try {
+    const { chave } = req.params;
+    const agent = criarAgent();
+    const token = await obterToken(agent);
+    const resposta = await axios.get(`${EFI_BASE_URL}/v2/webhook/${chave}`, {
+      httpsAgent: agent,
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    return res.json(resposta.data);
+  } catch (erro) {
+    console.error('[ERRO GET /webhook]', erro?.response?.data || erro.message);
+    return res.status(erro.response?.status || 500).json({
+      erro: 'Falha ao consultar webhook.',
+      detalhe: erro?.response?.data || erro.message,
+    });
   }
 });
 
