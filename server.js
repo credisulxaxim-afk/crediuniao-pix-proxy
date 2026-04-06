@@ -234,7 +234,7 @@ app.put('/webhook/:chave', validarSegredo, async (req, res) => {
       { webhookUrl },
       {
         httpsAgent: agent,
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'x-skip-mtls-checking': 'true' },
       }
     );
     return res.json({ sucesso: true, status: resposta.status, data: resposta.data });
