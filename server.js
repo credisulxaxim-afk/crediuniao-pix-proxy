@@ -168,6 +168,50 @@ app.get('/consultar-pix/:txid', validarSegredo, async (req, res) => {
   }
 });
 
+// ─── Buscar certificado CA da Efí via mTLS (para configurar Cloudflare) ──────
+app.get('/efi-ca-cert', async (req, res) => {
+  try {
+    const agent = criarAgent();
+    const resposta = await axios.get('https://pix.api.efipay.com.br/.well-known/pix.crt', {
+      httpsAgent: agent,
+      responseType: 'text',
+      headers: { 'Accept': '*/*' },
+    });
+    res.set('Content-Type', 'application/x-pem-file');
+    res.set('Content-Disposition', 'attachment; filename="efi-ca.crt"');
+    return res.send(resposta.data);
+  } catch (erro) {
+    console.error('[ERRO /efi-ca-cert]', erro?.response?.data || erro.message);
+    return res.status(500).json({ erro: 'Falha ao buscar certificado CA.', detalhe: erro?.response?.data || erro.message });
+  }
+});
+
+// ─── Webhook relay: recebe da Efí e repassa ao Base44 ────────────────────────
+// GET: validação da URL pelo Efí ao registrar o webhook
+app.get('/webhook/callback', (req, res) => {
+  res.status(200).send('OK');
+});
+
+// POST: recebe notificação de Pix pago da Efí e repassa ao Base44
+app.post('/webhook/callback', async (req, res) => {
+  try {
+    const BASE44_WEBHOOK_URL = process.env.BASE44_WEBHOOK_URL || '';
+    if (!BASE44_WEBHOOK_URL) {
+      console.error('[WEBHOOK] BASE44_WEBHOOK_URL não configurado.');
+      return res.status(500).json({ erro: 'BASE44_WEBHOOK_URL não configurado.' });
+    }
+    console.log('[WEBHOOK] Recebido da Efí:', JSON.stringify(req.body));
+    const resposta = await axios.post(BASE44_WEBHOOK_URL, req.body, {
+      headers: { 'Content-Type': 'application/json' },
+    });
+    console.log('[WEBHOOK] Repassado ao Base44, status:', resposta.status);
+    return res.status(200).json({ sucesso: true });
+  } catch (erro) {
+    console.error('[ERRO /webhook/callback]', erro?.response?.data || erro.message);
+    return res.status(500).json({ erro: 'Falha ao repassar webhook.', detalhe: erro?.response?.data || erro.message });
+  }
+});
+
 // ─── Registrar webhook Pix na Efí ────────────────────────────────────────────
 app.put('/webhook/:chave', validarSegredo, async (req, res) => {
   try {
@@ -211,32 +255,6 @@ app.get('/webhook/:chave', validarSegredo, async (req, res) => {
       erro: 'Falha ao consultar webhook.',
       detalhe: erro?.response?.data || erro.message,
     });
-  }
-});
-
-// ─── Webhook relay: recebe da Efí e repassa ao Base44 ────────────────────────
-// GET: validação da URL pelo Efí ao registrar o webhook
-app.get('/webhook/callback', (req, res) => {
-  res.status(200).send('OK');
-});
-
-// POST: recebe notificação de Pix pago da Efí e repassa ao Base44
-app.post('/webhook/callback', async (req, res) => {
-  try {
-    const BASE44_WEBHOOK_URL = process.env.BASE44_WEBHOOK_URL || '';
-    if (!BASE44_WEBHOOK_URL) {
-      console.error('[WEBHOOK] BASE44_WEBHOOK_URL não configurado.');
-      return res.status(500).json({ erro: 'BASE44_WEBHOOK_URL não configurado.' });
-    }
-    console.log('[WEBHOOK] Recebido da Efí:', JSON.stringify(req.body));
-    const resposta = await axios.post(BASE44_WEBHOOK_URL, req.body, {
-      headers: { 'Content-Type': 'application/json' },
-    });
-    console.log('[WEBHOOK] Repassado ao Base44, status:', resposta.status);
-    return res.status(200).json({ sucesso: true });
-  } catch (erro) {
-    console.error('[ERRO /webhook/callback]', erro?.response?.data || erro.message);
-    return res.status(500).json({ erro: 'Falha ao repassar webhook.', detalhe: erro?.response?.data || erro.message });
   }
 });
 
