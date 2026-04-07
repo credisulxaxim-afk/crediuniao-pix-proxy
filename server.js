@@ -22,15 +22,11 @@ const PIX_CLIENT_ID     = process.env.PIX_CLIENT_ID || '';
 const PIX_CLIENT_SECRET = process.env.PIX_CLIENT_SECRET || '';
 const PIX_PROXY_SECRET  = process.env.PIX_PROXY_SECRET || '';
 
-// IMPORTANTE:
-// No Railway, garanta que exista BASE44_WEBHOOK_URL com a URL correta.
-// Se quiser manter compatibilidade com nome antigo, deixei fallback também.
 const BASE44_WEBHOOK_URL =
   process.env.BASE44_WEBHOOK_URL ||
   process.env.URL_DE_WEBHOOK_BASE44 ||
   '';
 
-// Chave Pix pagadora da conta Efí
 const CHAVE_PIX_PAGADOR = 'c46897e1-3a12-478a-9b47-0e529b33b1ee';
 
 // ─── Efí Produção ─────────────────────────────────────────────────────────────
@@ -151,9 +147,6 @@ app.post('/pix', validarSegredo, handleGerarPix);
 app.post('/gerar-pix', validarSegredo, handleGerarPix);
 
 // ─── Pagar via Pix (enviar por chave ou QR Code) ─────────────────────────────
-// Efí:
-// - chave Pix: PUT /v3/gn/pix/:idEnvio
-// - QR Code:   PUT /v2/gn/pix/:idEnvio/qrcode
 app.post('/pagar-pix', validarSegredo, async (req, res) => {
   try {
     const { chave, valor, descricao, qrcode, pixCopiaECola } = req.body;
@@ -176,7 +169,6 @@ app.post('/pagar-pix', validarSegredo, async (req, res) => {
     const agent = criarAgent();
     const token = await obterToken(agent);
 
-    // id único da operação
     const idEnvio = Date.now().toString();
 
     let url;
@@ -242,7 +234,6 @@ app.post('/pagar-pix', validarSegredo, async (req, res) => {
 });
 
 // ─── Consultar envio Pix por idEnvio ──────────────────────────────────────────
-// Efí recomenda consultar este endpoint antes de reenviar quando houver dúvida.
 app.get('/consultar-envio-pix/:idEnvio', validarSegredo, async (req, res) => {
   try {
     const { idEnvio } = req.params;
@@ -376,8 +367,12 @@ app.get('/efi-ca-cert', async (req, res) => {
   }
 });
 
-// ─── Webhook relay ────────────────────────────────────────────────────────────
+// ─── Webhooks ─────────────────────────────────────────────────────────────────
 app.get('/webhook/callback', (req, res) => {
+  res.status(200).send('OK');
+});
+
+app.get('/webhook/callback/pix', (req, res) => {
   res.status(200).send('OK');
 });
 
@@ -403,6 +398,33 @@ app.post('/webhook/callback', async (req, res) => {
     console.error('[ERRO /webhook/callback]', erro?.response?.data || erro.message);
     return res.status(500).json({
       erro: 'Falha ao repassar webhook.',
+      detalhe: erro?.response?.data || erro.message,
+    });
+  }
+});
+
+app.post('/webhook/callback/pix', async (req, res) => {
+  try {
+    if (!BASE44_WEBHOOK_URL) {
+      console.error('[WEBHOOK PIX] BASE44_WEBHOOK_URL não configurado.');
+      return res.status(500).json({
+        erro: 'BASE44_WEBHOOK_URL não configurado.',
+      });
+    }
+
+    console.log('[WEBHOOK PIX] Recebido da Efí:', JSON.stringify(req.body));
+
+    const resposta = await axios.post(BASE44_WEBHOOK_URL, req.body, {
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    console.log('[WEBHOOK PIX] Repassado ao Base44, status:', resposta.status);
+
+    return res.status(200).json({ sucesso: true });
+  } catch (erro) {
+    console.error('[ERRO /webhook/callback/pix]', erro?.response?.data || erro.message);
+    return res.status(500).json({
+      erro: 'Falha ao repassar webhook Pix.',
       detalhe: erro?.response?.data || erro.message,
     });
   }
